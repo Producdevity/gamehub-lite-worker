@@ -850,20 +850,31 @@ export default {
         )
       }
 
-      // Handle simulator/v2/getComponentList endpoint
+      // Handle simulator/v2/getComponentList endpoint (GET from EnvLayerRepository, POST from GameSettingViewModel)
       if (
         url.pathname === '/simulator/v2/getComponentList' &&
-        request.method === 'POST'
+        (request.method === 'POST' || request.method === 'GET')
       ) {
-        // Parse POST body
-        const body = (await request.json()) as {
-          type?: number
-          page?: number
-          page_size?: number
+        let type: number | undefined
+        let page: number
+        let pageSize: number
+
+        if (request.method === 'POST') {
+          // Parse POST body (per-game settings path)
+          const body = (await request.json()) as {
+            type?: number
+            page?: number
+            page_size?: number
+          }
+          type = body.type
+          page = body.page || 1
+          pageSize = body.page_size || 10
+        } else {
+          // Parse GET query params (environment tab navigation path)
+          type = Number(url.searchParams.get('type')) || undefined
+          page = Number(url.searchParams.get('page')) || 1
+          pageSize = Number(url.searchParams.get('page_size')) || 10
         }
-        const type = body.type
-        const page = body.page || 1
-        const pageSize = body.page_size || 10
 
         if (!type || !TYPE_TO_MANIFEST[type]) {
           return new Response(
