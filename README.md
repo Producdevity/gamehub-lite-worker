@@ -1,8 +1,8 @@
-# GameHub API Proxy Worker
+# GameHub Lite API Proxy Worker
 
 Main Cloudflare Worker that proxies all GameHub app API requests, handles automatic token replacement with signature regeneration, and provides privacy-focused features.
 
-**Deployed at:** `https://gamehub-api.secureflex.workers.dev`
+**Deployed at:** `https://gamehub-lite-token-refresher.emuready.workers.dev`
 
 ---
 
@@ -395,7 +395,7 @@ curl -X POST http://localhost:8787/card/getGameDetail \
 ```jsonc
 {
   "vars": {
-    "TOKEN_REFRESHER_URL": "https://gamehub-token-refresher.secureflex.workers.dev",
+    "TOKEN_REFRESHER_URL": "https://gamehub-token-refresher.emuready.workers.dev",
   },
 }
 ```
@@ -404,9 +404,8 @@ curl -X POST http://localhost:8787/card/getGameDetail \
 
 ```typescript
 const GITHUB_BASE =
-  'https://raw.githubusercontent.com/gamehublite/gamehub_api/main'
-const NEWS_AGGREGATOR_URL =
-  'https://gamehub-news-aggregator.secureflex.workers.dev'
+  'https://raw.githubusercontent.com/Producdevity/gamehub-lite-api/master'
+const NEWS_AGGREGATOR_URL = 'https://gamehub-lite-news.emuready.workers.dev'
 const GAMEHUB_SECRET_KEY = 'all-egg-shell-y7ZatUDk'
 ```
 
@@ -484,7 +483,7 @@ const GAMEHUB_SECRET_KEY = 'all-egg-shell-y7ZatUDk'
 
    ```smali
    # Change in network config
-   const-string v0, "https://gamehub-api.secureflex.workers.dev"
+   const-string v0, "https://gamehub-lite-api.emuready.workers.dev"
    ```
 
 2. **Token Hardcode**:
@@ -522,7 +521,7 @@ Output:
 
 ```
 Deployed gamehub-api
-  https://gamehub-api-YOUR-NAME.workers.dev
+  https://gamehub-lite-api.YOUR-NAME.workers.dev
 ```
 
 Update APK to use your worker URL!
@@ -560,4 +559,4 @@ Update APK to use your worker URL!
 
 ---
 
-**For questions or issues, see the main GameHub documentation.**
+**For questions or issues, see the main GameHub Lite documentation.**

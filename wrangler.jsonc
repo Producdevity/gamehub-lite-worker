@@ -31,7 +31,7 @@
    * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
    */
   "vars": {
-    "TOKEN_REFRESHER_URL": "https://gamehub-lite-token-refresh.emuready.workers.dev",
+    "TOKEN_REFRESHER_URL": "https://gamehub-lite-token-refresher.emuready.workers.dev",
   },
   /**
    * KV Namespaces
