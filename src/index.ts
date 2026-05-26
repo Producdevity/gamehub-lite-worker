@@ -25,6 +25,204 @@ const TYPE_TO_MANIFEST: Record<number, string> = {
 
 // CDN proxying removed - components now download directly from source
 
+type ExecuteScriptVariant = 'generic' | 'qualcomm'
+
+type ExecuteScriptBody = Record<string, unknown>
+
+interface ExecuteScriptContext {
+  params?: unknown[]
+  [key: string]: unknown
+}
+
+interface ExecuteScriptData {
+  execution_context?: ExecuteScriptContext
+  [key: string]: unknown
+}
+
+interface ExecuteScriptResponse {
+  code?: number
+  msg?: string
+  data?: ExecuteScriptData | null
+  time?: string
+  [key: string]: unknown
+}
+
+interface SearchGame {
+  id?: unknown
+  steam_appid?: string
+  [key: string]: unknown
+}
+
+interface SearchGameResponse {
+  data?: {
+    list?: SearchGame[]
+    total?: unknown
+    all_game_ids?: unknown
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
+interface FreeGameTopic {
+  id?: unknown
+  display_card_num?: number
+  card_list: unknown[]
+  [key: string]: unknown
+}
+
+interface FreeGamesResponse {
+  data: FreeGameTopic[]
+  [key: string]: unknown
+}
+
+interface ComponentManifestResponse {
+  data?: {
+    components?: unknown[]
+    list?: unknown[]
+    page?: number
+    pageSize?: number
+    total?: number
+    [key: string]: unknown
+  }
+  [key: string]: unknown
+}
+
+function parseBodyObject(bodyText: string): ExecuteScriptBody {
+  try {
+    const parsed = JSON.parse(bodyText) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as ExecuteScriptBody
+    }
+  } catch {}
+
+  return {}
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return String(value)
+  }
+
+  return fallback
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  if (typeof value === 'string') {
+    if (value.trim() === '') {
+      return fallback
+    }
+
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) {
+      return parsed
+    }
+  }
+
+  return fallback
+}
+
+function getExecuteScriptVariant(
+  body: ExecuteScriptBody,
+): ExecuteScriptVariant {
+  const gpuText = `${stringValue(body.gpu_vendor, '')} ${stringValue(
+    body.gpu_device_name,
+    '',
+  )}`.toLowerCase()
+
+  return gpuText.includes('qualcomm') || gpuText.includes('adreno')
+    ? 'qualcomm'
+    : 'generic'
+}
+
+function applyRequestContext(
+  responseData: ExecuteScriptResponse,
+  body: ExecuteScriptBody,
+): ExecuteScriptResponse {
+  if (!responseData.data) {
+    return responseData
+  }
+
+  const currentContext = responseData.data.execution_context ?? {}
+  const params = Array.isArray(currentContext.params)
+    ? [...currentContext.params]
+    : []
+
+  params[0] = stringValue(body.gpu_vendor, stringValue(params[0], 'Unknown'))
+  params[1] = numberValue(body.gpu_version, numberValue(params[1], 0))
+  params[2] = stringValue(body.gpu_device_name, stringValue(params[2], ''))
+  params[3] = numberValue(
+    body.gpu_system_driver_version,
+    numberValue(params[3], 0),
+  )
+  params[4] = stringValue(body.game_id, stringValue(params[4], '0'))
+  params[5] = numberValue(body.game_type, numberValue(params[5], 0))
+
+  responseData.data.execution_context = {
+    ...currentContext,
+    params,
+  }
+  responseData.time = Math.floor(Date.now() / 1000).toString()
+
+  return responseData
+}
+
+async function handleExecuteScript(
+  bodyText: string,
+  headers: HeadersInit,
+): Promise<Response> {
+  const body = parseBodyObject(bodyText)
+  const variant = getExecuteScriptVariant(body)
+  const presetUrl = `${GITHUB_BASE}/simulator/executeScript/${variant}`
+  const presetResponse = await fetch(presetUrl, {
+    cf: {
+      cacheTtl: 0,
+      cacheEverything: false,
+    },
+  })
+
+  if (!presetResponse.ok) {
+    console.error(
+      '[EXECUTE_SCRIPT] Failed to fetch preset:',
+      presetResponse.status,
+      presetUrl,
+    )
+
+    return new Response(
+      JSON.stringify({
+        code: 500,
+        msg: 'Failed to fetch executeScript preset',
+        time: Math.floor(Date.now() / 1000).toString(),
+        data: null,
+      }),
+      {
+        status: 502,
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+      },
+    )
+  }
+
+  const responseData = (await presetResponse.json()) as ExecuteScriptResponse
+  const patchedResponse = applyRequestContext(responseData, body)
+
+  return new Response(JSON.stringify(patchedResponse), {
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+  })
+}
+
 export default {
   async fetch(request, env, ctx): Promise<Response> {
     const url = new URL(request.url)
@@ -52,6 +250,13 @@ export default {
     }
 
     try {
+      if (
+        url.pathname === '/simulator/executeScript' &&
+        request.method === 'POST'
+      ) {
+        return handleExecuteScript(await request.text(), allHeaders)
+      }
+
       // ============================================================
       // TOKEN INTERCEPTION - Replace "fake-token" with real token
       // ============================================================
@@ -90,7 +295,7 @@ export default {
         // This avoids HTTP calls and reduces token-refresher load from 600k+ to ~0
         const tokenDataStr = await env.TOKEN_STORE.get('gamehub_token')
 
-        let realToken: string
+        let realToken: string | undefined
 
         if (tokenDataStr) {
           const tokenData = JSON.parse(tokenDataStr)
@@ -343,20 +548,20 @@ export default {
           },
         )
 
-        const responseData = await chineseResponse.json()
+        const responseData =
+          (await chineseResponse.json()) as SearchGameResponse
 
         // Filter to show only Steam games (steam_appid !== "0" and steam_appid exists)
-        if (responseData.data && responseData.data.list) {
+        if (responseData.data?.list) {
           const originalCount = responseData.data.list.length
 
           // Keep only games with valid Steam app IDs
-          responseData.data.list = responseData.data.list.filter((game) => {
-            return (
-              game.steam_appid &&
+          responseData.data.list = responseData.data.list.filter(
+            (game: SearchGame) =>
+              Boolean(game.steam_appid) &&
               game.steam_appid !== '0' &&
-              game.steam_appid !== ''
-            )
-          })
+              game.steam_appid !== '',
+          )
 
           const filteredCount = responseData.data.list.length
           console.log(
@@ -376,7 +581,7 @@ export default {
           // Update all_game_ids to match filtered list
           if (responseData.data.all_game_ids) {
             responseData.data.all_game_ids = responseData.data.list.map(
-              (game) => ({
+              (game: SearchGame) => ({
                 steam_app_id: game.steam_appid,
                 game_id: game.id,
               }),
@@ -519,14 +724,16 @@ export default {
           console.log('[FREE_GAMES] Successfully read free games from KV')
 
           // Parse the data
-          let freeGamesData = JSON.parse(cachedData)
+          const freeGamesData = JSON.parse(cachedData) as FreeGamesResponse
 
           // BOTH OLD & NEW: Return ALL topics with initial display_card_num items
           // Slice each topic's card_list to display_card_num (initially show 6 items max)
-          freeGamesData.data = freeGamesData.data.map((topic) => ({
-            ...topic,
-            card_list: topic.card_list.slice(0, topic.display_card_num),
-          }))
+          freeGamesData.data = freeGamesData.data.map(
+            (topic: FreeGameTopic) => ({
+              ...topic,
+              card_list: topic.card_list.slice(0, topic.display_card_num),
+            }),
+          )
 
           console.log(
             `[FREE_GAMES] Returning ${freeGamesData.data.length} topics with initial items`,
@@ -560,10 +767,14 @@ export default {
         console.log('[FREE_GAMES_MORE] Getting more items for topic')
 
         try {
-          const body = await request.json()
+          const body = (await request.json()) as {
+            id?: unknown
+            page?: unknown
+            page_size?: unknown
+          }
           const topicId = body.id
-          const page = body.page || 1
-          const pageSize = body.page_size || 30
+          const page = numberValue(body.page, 1)
+          const pageSize = numberValue(body.page_size, 30)
 
           if (!topicId) {
             return new Response(
@@ -597,8 +808,10 @@ export default {
             )
           }
 
-          const freeGamesData = JSON.parse(cachedData)
-          const topic = freeGamesData.data.find((t) => t.id === topicId)
+          const freeGamesData = JSON.parse(cachedData) as FreeGamesResponse
+          const topic = freeGamesData.data.find(
+            (t: FreeGameTopic) => t.id === topicId,
+          )
 
           if (!topic) {
             return new Response(
@@ -660,37 +873,6 @@ export default {
             },
           )
         }
-      }
-
-      // Proxy /simulator/executeScript to Chinese server (NO sanitization)
-      if (
-        url.pathname === '/simulator/executeScript' &&
-        request.method === 'POST'
-      ) {
-        // Reuse bodyText if we already read it during token replacement
-        if (!bodyText) {
-          bodyText = await request.text()
-        }
-
-        // Forward request AS-IS to Chinese server with all original headers
-        const chineseResponse = await fetch(
-          `${GH_BASE_URL}/simulator/executeScript`,
-          {
-            method: 'POST',
-            headers: request.headers,
-            body: bodyText,
-          },
-        )
-
-        const responseData = await chineseResponse.json()
-
-        // Return the Chinese server response as-is (no cache)
-        return new Response(JSON.stringify(responseData), {
-          headers: {
-            'Content-Type': 'application/json',
-            ...allHeaders,
-          },
-        })
       }
 
       // Handle /heartbeat/game/start endpoint - Return success to allow game launch
@@ -900,16 +1082,17 @@ export default {
           )
         }
 
-        const manifestData = await response.json()
+        const manifestData =
+          (await response.json()) as ComponentManifestResponse
 
         // Transform response: rename 'components' to 'list' if it exists
-        if (manifestData.data && manifestData.data.components) {
+        if (manifestData.data?.components) {
           manifestData.data.list = manifestData.data.components
           delete manifestData.data.components
         }
 
         // Handle pagination
-        if (manifestData.data && manifestData.data.list) {
+        if (manifestData.data?.list) {
           const allItems = manifestData.data.list
           const total = manifestData.data.total || allItems.length
 
@@ -951,8 +1134,10 @@ export default {
         },
       })
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+
       return new Response(
-        JSON.stringify({ code: 500, msg: `Error: ${error.message}` }),
+        JSON.stringify({ code: 500, msg: `Error: ${message}` }),
         {
           status: 500,
           headers: { 'Content-Type': 'application/json', ...allHeaders },
